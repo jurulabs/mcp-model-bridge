@@ -1,0 +1,15 @@
+{
+  "tiers": {
+    "cheap": "gpt-5.6-luna",
+    "default": "claude-sonnet-5",
+    "strong": "claude-opus-5"
+  },
+  "allowedModels": [
+    "gpt-5.6-luna",
+    "mai-code-1.1-flash",
+    "claude-haiku-4-5",
+    "claude-sonnet-5",
+    "claude-opus-5"
+  ]
+}
+
