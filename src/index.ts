@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -13,16 +14,24 @@ import type { GatewayClient } from './types.js';
 
 const DEFAULT_MAX_ROUNDS = 4;
 const ROUND_CEILING = 10;
+const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+const MODEL_POLICY_SCHEMA = z.object({
+  tiers: z.record(z.string(), z.string()).default({}),
+  allowedModels: z.array(z.string()).default([]),
+});
 
 async function main(): Promise<void> {
   const workspaceRoot = resolve(process.env['BRIDGE_WORKSPACE_ROOT'] ?? process.cwd());
   const agentsDirectory = resolve(
     process.env['BRIDGE_AGENTS_DIR'] ?? resolve(workspaceRoot, '.github/agents'),
   );
-  const policy = await loadPolicy(
-    resolve(process.env['BRIDGE_MODEL_POLICY'] ?? resolve(workspaceRoot, 'packages/mcp-model-bridge/model-policy.json')),
+  const policyPath = resolve(
+    process.env['BRIDGE_MODEL_POLICY'] ?? resolve(PACKAGE_ROOT, 'model-policy.json'),
   );
-  const gateway = createGateway();
+  const policy = await loadPolicy(policyPath);
+  const gatewayMode = resolveGatewayMode();
+  const gateway = createGateway(gatewayMode);
 
   const server = new McpServer({ name: 'model-bridge', version: '0.0.1' });
 
@@ -105,7 +114,7 @@ async function main(): Promise<void> {
               .map(([tier, id]) => `${tier} -> ${id}`)
               .join(', ')}`,
             `allowed models: ${policy.allowedModels.join(', ')}`,
-            `gateway: ${process.env['BRIDGE_GATEWAY_URL'] ? 'http' : 'mock'}`,
+            `gateway: ${gatewayMode.kind}`,
           ].join('\n'),
         },
       ],
@@ -116,31 +125,41 @@ async function main(): Promise<void> {
 }
 
 async function loadPolicy(path: string): Promise<ModelPolicy> {
-  const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
+  const raw: unknown = JSON.parse(await readFile(path, 'utf8'));
+  const parsed = MODEL_POLICY_SCHEMA.safeParse(raw);
 
-  if (typeof parsed !== 'object' || parsed === null) {
-    throw new Error(`Model policy at ${path} is not an object`);
+  if (!parsed.success) {
+    throw new Error(`Model policy at ${path} is invalid: ${parsed.error.message}`);
   }
 
-  const candidate = parsed as { tiers?: unknown; allowedModels?: unknown };
-
-  return {
-    tiers: (candidate.tiers ?? {}) as Readonly<Record<string, string>>,
-    allowedModels: Array.isArray(candidate.allowedModels)
-      ? (candidate.allowedModels as string[])
-      : [],
-  };
+  return parsed.data;
 }
 
-function createGateway(): GatewayClient {
+type GatewayMode =
+  | { readonly kind: 'http'; readonly baseUrl: string; readonly token: string }
+  | { readonly kind: 'mock' };
+
+/**
+ * Decides the gateway once, so the reported mode and the client in use can
+ * never disagree. A half-configured gateway reports "mock", which surfaces the
+ * missing variable instead of hiding it behind a confident label.
+ */
+function resolveGatewayMode(): GatewayMode {
   const baseUrl = process.env['BRIDGE_GATEWAY_URL'];
   const token = process.env['BRIDGE_GATEWAY_TOKEN'];
 
-  return baseUrl && token ? createHttpGateway({ baseUrl, token }) : createMockGateway();
+  return baseUrl && token ? { kind: 'http', baseUrl, token } : { kind: 'mock' };
+}
+
+function createGateway(mode: GatewayMode): GatewayClient {
+  return mode.kind === 'http'
+    ? createHttpGateway({ baseUrl: mode.baseUrl, token: mode.token })
+    : createMockGateway();
 }
 
 main().catch((error: unknown) => {
   process.stderr.write(`model-bridge failed to start: ${String(error)}\n`);
   process.exit(1);
 });
+
 

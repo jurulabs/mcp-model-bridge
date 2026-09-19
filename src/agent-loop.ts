@@ -10,6 +10,7 @@ import type {
 } from './types.js';
 
 const MAX_TOOL_OUTPUT_CHARS = 8_000;
+const TOOL_BLOCK_PATTERN = /```tool\s*\r?\n[\s\S]*?```/g;
 
 export interface BoundedAgentRun {
   readonly agent: AgentDefinition;
@@ -70,13 +71,23 @@ export async function runBoundedAgent(run: BoundedAgentRun): Promise<AgentRunRes
   }
 
   return {
-    output,
+    output: stripToolBlocks(output),
     modelUsed: run.model.id,
     tierRequested: run.model.tier,
     roundsUsed,
     toolCallsMade,
     stoppedReason,
   };
+}
+
+/**
+ * Removes the tool-call protocol from the text handed back to the caller.
+ *
+ * A run stopped by the round limit ends on a turn that was still requesting
+ * tools, so without this the caller receives protocol noise instead of prose.
+ */
+function stripToolBlocks(text: string): string {
+  return text.replace(TOOL_BLOCK_PATTERN, '').trim();
 }
 
 async function executeTool(
@@ -103,4 +114,5 @@ function truncate(content: string, limit: number): string {
     ? content
     : `${content.slice(0, limit)}\n… truncated at ${limit} characters …`;
 }
+
 

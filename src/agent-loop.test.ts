@@ -166,5 +166,27 @@ describe('runBoundedAgent', () => {
       }),
     ).rejects.toThrow(/at least 1/i);
   });
+
+  it('strips tool protocol blocks from the returned output', async () => {
+    const gateway = gatewayReturning(
+      ...Array.from({ length: 5 }, () => ({
+        text: 'still working\n```tool\n{"tool":"grep_search","input":{}}\n```',
+        toolCalls: [{ tool: 'grep_search', input: {} }],
+      })),
+    );
+
+    const result = await runBoundedAgent({
+      agent: AGENT,
+      model: { id: 'm', tier: 'cheap' },
+      task: 'x',
+      gateway,
+      tools: [toolStub('grep_search')],
+      maxRounds: 2,
+    });
+
+    expect(result.stoppedReason).toBe('round-limit');
+    expect(result.output).toBe('still working');
+  });
 });
+
 

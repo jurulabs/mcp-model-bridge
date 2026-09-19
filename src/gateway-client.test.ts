@@ -1,5 +1,16 @@
-import { describe, expect, it } from 'vitest';
-import { createMockGateway, parseToolCalls } from './gateway-client.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createHttpGateway, createMockGateway, parseToolCalls } from './gateway-client.js';
+
+const REQUEST = {
+  model: 'claude-sonnet-5',
+  systemPrompt: 'You are Explorer.',
+  messages: [{ role: 'user' as const, content: 'find things' }],
+  toolNames: ['grep_search'],
+};
+
+function stubFetch(response: Partial<Response> & { json?: () => Promise<unknown> }): void {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+}
 
 describe('parseToolCalls', () => {
   it('finds a single tool call in a fenced block', () => {
@@ -98,4 +109,72 @@ describe('createMockGateway', () => {
     expect(reply.toolCalls).toEqual([]);
   });
 });
+
+describe('createHttpGateway', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('extracts text from a successful response', async () => {
+    stubFetch({ ok: true, json: async () => ({ content: [{ text: 'hello ' }, { text: 'world' }] }) });
+
+    const reply = await createHttpGateway({ baseUrl: 'https://gw', token: 't' }).complete(REQUEST);
+
+    expect(reply.text).toBe('hello world');
+  });
+
+  it('parses tool calls out of the response text', async () => {
+    stubFetch({
+      ok: true,
+      json: async () => ({
+        content: [{ text: '```tool\n{"tool":"grep_search","input":{"pattern":"x"}}\n```' }],
+      }),
+    });
+
+    const reply = await createHttpGateway({ baseUrl: 'https://gw', token: 't' }).complete(REQUEST);
+
+    expect(reply.toolCalls).toEqual([{ tool: 'grep_search', input: { pattern: 'x' } }]);
+  });
+
+  it('throws with the status and body when the gateway rejects', async () => {
+    stubFetch({ ok: false, status: 401, text: async () => 'bad token' });
+
+    await expect(
+      createHttpGateway({ baseUrl: 'https://gw', token: 't' }).complete(REQUEST),
+    ).rejects.toThrow(/401.*bad token/s);
+  });
+
+  it('describes the tool protocol in the system prompt when tools exist', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ content: [] }) });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await createHttpGateway({ baseUrl: 'https://gw/', token: 't' }).complete(REQUEST);
+
+    const body = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body));
+    expect(body.system).toContain('grep_search');
+    expect(body.model).toBe('claude-sonnet-5');
+  });
+
+  it('leaves the system prompt untouched when no tools are offered', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ content: [] }) });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await createHttpGateway({ baseUrl: 'https://gw', token: 't' }).complete({
+      ...REQUEST,
+      toolNames: [],
+    });
+
+    const body = JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body));
+    expect(body.system).toBe('You are Explorer.');
+  });
+
+  it('returns empty text when the payload has no content array', async () => {
+    stubFetch({ ok: true, json: async () => ({}) });
+
+    const reply = await createHttpGateway({ baseUrl: 'https://gw', token: 't' }).complete(REQUEST);
+
+    expect(reply.text).toBe('');
+  });
+});
+
 
