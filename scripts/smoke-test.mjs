@@ -63,6 +63,7 @@ try {
   const config = textOf(await client.callTool({ name: 'list_agents', arguments: {} }));
   process.stdout.write(`${config}\n`);
   check('agents directory resolves inside the host project', config.includes(hostProject));
+  check('lists the agent the host project defines', /agents: .*Scout/.test(config));
   check('project-local policy wins over the bundled one', config.includes('source: workspace'));
   check('host project tiers are in force', config.includes('cheap -> fixture-cheap-model'));
 
@@ -112,4 +113,5 @@ try {
 }
 
 process.exit(failures === 0 ? 0 : 1);
+
 

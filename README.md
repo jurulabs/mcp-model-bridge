@@ -106,7 +106,18 @@ The provenance block is the point of the exercise. A bridge that runs but report
 
 ### `list_agents`
 
-Reports the agents directory, the active policy file and where it came from, the tier map, the allow-list, and whether the gateway is live or mocked.
+Reports the agents the host project defines, the agents directory, the active policy file and where it came from, the tier map, the allow-list, and whether the gateway is live or mocked.
+
+```
+agents directory: C:\some\project\.github\agents
+agents: Explorer, Reviewer, ShopifyApi, Tester
+model policy: C:\some\project\.github\model-policy.json (source: workspace)
+tiers: cheap -> gpt-5.6-luna, default -> claude-sonnet-5, strong -> claude-opus-5
+allowed models: gpt-5.6-luna, claude-sonnet-5, claude-opus-5
+gateway: mock
+```
+
+A project with no agents directory reports `agents: (none found)` rather than failing, so the tool can still explain the rest of the configuration.
 
 ## Registering in JetBrains
 
@@ -160,4 +171,5 @@ To move this package into its own repository, see [EXTRACTION.md](./EXTRACTION.m
 - The gateway client implements an Anthropic-style Messages schema. A different upstream shape is a one-file change in `src/gateway-client.ts`.
 - Tool calls travel as fenced ` ```tool ` blocks rather than a native tool-calling API, which keeps the bridge portable at the cost of some reliability on weaker models.
 - Publishing under the `@jurulabs` scope requires owning that scope on the target registry. Git and `npm link` installs need no registry at all.
+
 
