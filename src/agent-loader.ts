@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { stripBom } from './text.js';
 import type { AgentDefinition } from './types.js';
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/;
@@ -12,7 +13,7 @@ const LIST_ENTRY_PATTERN = /['"]([^'"]+)['"]/g;
  * single source of truth for both the native agent and this bridge.
  */
 export function parseAgentDefinition(source: string): AgentDefinition {
-  const match = FRONTMATTER_PATTERN.exec(source);
+  const match = FRONTMATTER_PATTERN.exec(stripBom(source));
   if (!match) {
     throw new Error('Agent file is missing YAML frontmatter delimited by ---');
   }
@@ -90,4 +91,5 @@ function isMissingFile(error: unknown): boolean {
     (error as { code?: string }).code === 'ENOENT'
   );
 }
+
 

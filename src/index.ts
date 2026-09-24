@@ -1,4 +1,6 @@
+#!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -9,6 +11,8 @@ import { runBoundedAgent } from './agent-loop.js';
 import { createHttpGateway, createMockGateway } from './gateway-client.js';
 import { resolveModel } from './model-resolver.js';
 import type { ModelPolicy } from './model-resolver.js';
+import { locateModelPolicy } from './policy-locator.js';
+import { stripBom } from './text.js';
 import { createWorkspaceTools } from './workspace-tools.js';
 import type { GatewayClient } from './types.js';
 
@@ -26,14 +30,19 @@ async function main(): Promise<void> {
   const agentsDirectory = resolve(
     process.env['BRIDGE_AGENTS_DIR'] ?? resolve(workspaceRoot, '.github/agents'),
   );
-  const policyPath = resolve(
-    process.env['BRIDGE_MODEL_POLICY'] ?? resolve(PACKAGE_ROOT, 'model-policy.json'),
+  const policyLocation = locateModelPolicy(
+    {
+      explicit: process.env['BRIDGE_MODEL_POLICY'],
+      workspaceRoot,
+      packageRoot: PACKAGE_ROOT,
+    },
+    existsSync,
   );
-  const policy = await loadPolicy(policyPath);
+  const policy = await loadPolicy(policyLocation.path);
   const gatewayMode = resolveGatewayMode();
   const gateway = createGateway(gatewayMode);
 
-  const server = new McpServer({ name: 'model-bridge', version: '0.0.1' });
+  const server = new McpServer({ name: 'model-bridge', version: '0.1.0' });
 
   server.registerTool(
     'run_agent',
@@ -110,6 +119,7 @@ async function main(): Promise<void> {
           type: 'text' as const,
           text: [
             `agents directory: ${agentsDirectory}`,
+            `model policy: ${policyLocation.path} (source: ${policyLocation.source})`,
             `tiers: ${Object.entries(policy.tiers)
               .map(([tier, id]) => `${tier} -> ${id}`)
               .join(', ')}`,
@@ -125,7 +135,24 @@ async function main(): Promise<void> {
 }
 
 async function loadPolicy(path: string): Promise<ModelPolicy> {
-  const raw: unknown = JSON.parse(await readFile(path, 'utf8'));
+  let source: string;
+  try {
+    source = await readFile(path, 'utf8');
+  } catch {
+    throw new Error(
+      `Model policy not readable at ${path}. ` +
+        'Set BRIDGE_MODEL_POLICY, or add .github/model-policy.json to the project.',
+    );
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stripBom(source));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Model policy at ${path} is not valid JSON: ${reason}`);
+  }
+
   const parsed = MODEL_POLICY_SCHEMA.safeParse(raw);
 
   if (!parsed.success) {

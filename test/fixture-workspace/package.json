@@ -1,0 +1,6 @@
+{
+  "name": "fixture-workspace",
+  "private": true,
+  "description": "Stand-in host project for the bridge smoke test. Deliberately unrelated to the monorepo."
+}
+

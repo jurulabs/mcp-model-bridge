@@ -21,6 +21,12 @@ describe('parseAgentDefinition', () => {
     expect(agent.name).toBe('Explorer');
   });
 
+  it('accepts a file saved with a UTF-8 byte order mark', () => {
+    const agent = parseAgentDefinition(`\uFEFF${EXPLORER}`);
+
+    expect(agent.name).toBe('Explorer');
+  });
+
   it('reads the description from frontmatter', () => {
     const agent = parseAgentDefinition(EXPLORER);
 
@@ -80,4 +86,5 @@ describe('parseAgentDefinition', () => {
     expect(agent.declaredTools).toEqual(['read_file']);
   });
 });
+
 

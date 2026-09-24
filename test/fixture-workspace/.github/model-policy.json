@@ -1,0 +1,13 @@
+{
+  "tiers": {
+    "cheap": "fixture-cheap-model",
+    "default": "fixture-default-model",
+    "strong": "fixture-strong-model"
+  },
+  "allowedModels": [
+    "fixture-cheap-model",
+    "fixture-default-model",
+    "fixture-strong-model"
+  ]
+}
+
