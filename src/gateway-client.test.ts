@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createHttpGateway, createMockGateway, parseToolCalls } from './gateway-client.js';
+import {
+  createHttpGateway,
+  createMockGateway,
+  parseAuthScheme,
+  parseToolCalls,
+} from './gateway-client.js';
 
 const REQUEST = {
   model: 'claude-sonnet-5',
@@ -175,6 +180,52 @@ describe('createHttpGateway', () => {
 
     expect(reply.text).toBe('');
   });
+
+  it('sends the token as x-api-key by default', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ content: [] }) });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await createHttpGateway({ baseUrl: 'https://gw', token: 'secret' }).complete(REQUEST);
+
+    const headers = fetchSpy.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers['x-api-key']).toBe('secret');
+    expect(headers['authorization']).toBeUndefined();
+  });
+
+  it('sends the token as a bearer credential when asked', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ content: [] }) });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await createHttpGateway({
+      baseUrl: 'https://gw',
+      token: 'secret',
+      authScheme: 'bearer',
+    }).complete(REQUEST);
+
+    const headers = fetchSpy.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers['authorization']).toBe('Bearer secret');
+    expect(headers['x-api-key']).toBeUndefined();
+  });
 });
+
+describe('parseAuthScheme', () => {
+  it('defaults to x-api-key when unset', () => {
+    expect(parseAuthScheme(undefined)).toBe('x-api-key');
+  });
+
+  it('accepts bearer', () => {
+    expect(parseAuthScheme('bearer')).toBe('bearer');
+  });
+
+  it('ignores casing and surrounding space', () => {
+    expect(parseAuthScheme('  Bearer ')).toBe('bearer');
+  });
+
+  it('refuses an unknown scheme instead of guessing', () => {
+    expect(() => parseAuthScheme('basic')).toThrow(/basic/);
+  });
+});
+
+
 
 

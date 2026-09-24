@@ -56,10 +56,91 @@ node scripts/smoke-test.mjs C:\path\to\any\project
 | `BRIDGE_MODEL_POLICY` | auto-discovered | Tier map and allow-list |
 | `BRIDGE_GATEWAY_URL` | *(unset → mock)* | Anthropic-style Messages endpoint |
 | `BRIDGE_GATEWAY_TOKEN` | *(unset → mock)* | Credential, read from the environment only |
+| `BRIDGE_GATEWAY_AUTH` | `x-api-key` | `x-api-key` or `bearer` |
 
 In practice only `BRIDGE_WORKSPACE_ROOT` needs setting. Everything else is discovered.
 
 With `BRIDGE_GATEWAY_URL` and `BRIDGE_GATEWAY_TOKEN` unset, the server runs the mock gateway and reports `gateway: mock`. A half-configured gateway also reports `mock`, which surfaces the missing variable instead of hiding it behind a confident label.
+
+## Where the gateway values come from
+
+**Not from GitHub Copilot.** The Copilot subscription has no endpoint you can post arbitrary requests to, so it cannot serve as the gateway. The two values come from an inference provider you hold credentials with, billed separately from Copilot. That second cost centre is the price of choosing the model yourself.
+
+The client posts to `<BRIDGE_GATEWAY_URL>/v1/messages` in the Anthropic Messages schema. Any endpoint that speaks that schema works.
+
+### Anthropic directly
+
+| Variable | Value |
+|---|---|
+| `BRIDGE_GATEWAY_URL` | `https://api.anthropic.com` |
+| `BRIDGE_GATEWAY_TOKEN` | a key from *console.anthropic.com → Settings → API Keys* |
+| `BRIDGE_GATEWAY_AUTH` | leave unset — Anthropic expects `x-api-key` |
+
+Needs a paid Anthropic account with credit; the key is shown once at creation.
+
+### A corporate or self-hosted gateway
+
+| Variable | Value |
+|---|---|
+| `BRIDGE_GATEWAY_URL` | the base path the gateway documents **before** `/v1/messages` |
+| `BRIDGE_GATEWAY_TOKEN` | issued by that gateway's portal, not by Anthropic |
+| `BRIDGE_GATEWAY_AUTH` | usually `bearer` — these normally sit behind an OAuth proxy |
+
+Two things to confirm in the gateway's own documentation before wiring it up: that it exposes the **Anthropic Messages** schema rather than the OpenAI Chat Completions schema, and which model identifiers it accepts. If it is OpenAI-shaped, use a translating proxy.
+
+### A translating proxy, for anything else
+
+Run LiteLLM locally and it exposes an Anthropic-compatible surface over OpenAI, Azure OpenAI, Bedrock or Vertex:
+
+| Variable | Value |
+|---|---|
+| `BRIDGE_GATEWAY_URL` | `http://localhost:4000` |
+| `BRIDGE_GATEWAY_TOKEN` | the master key you set in the proxy config |
+| `BRIDGE_GATEWAY_AUTH` | `bearer` |
+
+The upstream provider key then lives in the proxy config, not in this bridge.
+
+### Model identifiers are the usual trip-hazard
+
+The bundled policy names Copilot picker labels such as `claude-sonnet-5`. **A provider API will not recognise those.** Replace them with the identifiers your gateway actually accepts, in the host project's `.github/model-policy.json`:
+
+```json
+{
+  "tiers": {
+    "cheap": "<provider id for a small model>",
+    "default": "<provider id for a mid model>",
+    "strong": "<provider id for a large model>"
+  },
+  "allowedModels": ["<provider id>", "<provider id>", "<provider id>"]
+}
+```
+
+A model outside the allow-list is refused, so a stale identifier fails at once rather than after a billed call.
+
+### Supplying the values
+
+Per session:
+
+```powershell
+$env:BRIDGE_GATEWAY_URL = 'https://api.anthropic.com'
+$env:BRIDGE_GATEWAY_TOKEN = '<key>'
+```
+
+Persistently for your user account:
+
+```powershell
+[Environment]::SetEnvironmentVariable('BRIDGE_GATEWAY_TOKEN', '<key>', 'User')
+```
+
+Never in the repository, never in the agent file, never in the policy file. `list_agents` prints the endpoint and auth scheme but never the token.
+
+Verify the wiring took effect by calling `list_agents`:
+
+```
+gateway: http (https://api.anthropic.com, auth: x-api-key)
+```
+
+`gateway: mock` means one of the two variables did not reach the process.
 
 ## Model policy
 
@@ -168,8 +249,10 @@ To move this package into its own repository, see [EXTRACTION.md](./EXTRACTION.m
 ## Known limits
 
 - Agent bodies written for richer toolsets degrade here. An agent that relies on `semantic_search` falls back to `grep_search`.
-- The gateway client implements an Anthropic-style Messages schema. A different upstream shape is a one-file change in `src/gateway-client.ts`.
+- The gateway client implements an Anthropic-style Messages schema. A different upstream shape is a one-file change in `src/gateway-client.ts`, or a translating proxy in front of it.
 - Tool calls travel as fenced ` ```tool ` blocks rather than a native tool-calling API, which keeps the bridge portable at the cost of some reliability on weaker models.
 - Publishing under the `@jurulabs` scope requires owning that scope on the target registry. Git and `npm link` installs need no registry at all.
+
+
 
 

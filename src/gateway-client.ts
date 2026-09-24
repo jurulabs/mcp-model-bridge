@@ -71,7 +71,52 @@ export function createMockGateway(): GatewayClient {
 export interface HttpGatewayOptions {
   readonly baseUrl: string;
   readonly token: string;
+  readonly authScheme?: GatewayAuthScheme;
   readonly maxTokens?: number;
+}
+
+/** How the gateway expects the credential to be presented. */
+export type GatewayAuthScheme = 'x-api-key' | 'bearer';
+
+const AUTH_SCHEMES: readonly GatewayAuthScheme[] = ['x-api-key', 'bearer'];
+const DEFAULT_AUTH_SCHEME: GatewayAuthScheme = 'x-api-key';
+
+/**
+ * Reads the configured auth scheme, refusing anything unrecognised.
+ *
+ * Anthropic expects `x-api-key`; most corporate gateways sit behind an OAuth
+ * proxy and expect `Authorization: Bearer`. Guessing wrong produces a 401 that
+ * looks like a bad token, so the choice is explicit and a typo fails loudly.
+ */
+export function parseAuthScheme(value: string | undefined): GatewayAuthScheme {
+  const normalised = value?.trim().toLowerCase() ?? '';
+  if (normalised.length === 0) {
+    return DEFAULT_AUTH_SCHEME;
+  }
+
+  const match = AUTH_SCHEMES.find((scheme) => scheme === normalised);
+  if (!match) {
+    throw new Error(
+      `Unknown gateway auth scheme "${value}". Use one of: ${AUTH_SCHEMES.join(', ')}.`,
+    );
+  }
+
+  return match;
+}
+
+function buildHeaders(options: HttpGatewayOptions): Record<string, string> {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'anthropic-version': '2023-06-01',
+  };
+
+  if ((options.authScheme ?? DEFAULT_AUTH_SCHEME) === 'bearer') {
+    headers['authorization'] = `Bearer ${options.token}`;
+  } else {
+    headers['x-api-key'] = options.token;
+  }
+
+  return headers;
 }
 
 /**
@@ -85,11 +130,7 @@ export function createHttpGateway(options: HttpGatewayOptions): GatewayClient {
     complete: async (request: GatewayRequest): Promise<GatewayReply> => {
       const response = await fetch(`${options.baseUrl.replace(/\/$/, '')}/v1/messages`, {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': options.token,
-          'anthropic-version': '2023-06-01',
-        },
+        headers: buildHeaders(options),
         body: JSON.stringify({
           model: request.model,
           max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
@@ -169,4 +210,6 @@ function toToolCall(parsed: unknown): ToolCall | undefined {
 
   return { tool: candidate.tool, input };
 }
+
+
 
