@@ -8,12 +8,18 @@ import { z } from 'zod';
 import { listAgentNames } from './agent-directory.js';
 import { loadAgentDefinition } from './agent-loader.js';
 import { runBoundedAgent } from './agent-loop.js';
-import { createHttpGateway, createMockGateway, parseAuthScheme } from './gateway-client.js';
+import {
+  createHttpGateway,
+  createMockGateway,
+  parseAuthScheme,
+  parseGatewaySchema,
+  resolveEndpoint,
+} from './gateway-client.js';
 import { resolveModel } from './model-resolver.js';
 import { loadModelPolicy } from './policy-loader.js';
 import { locateModelPolicy } from './policy-locator.js';
 import { createWorkspaceTools } from './workspace-tools.js';
-import type { GatewayAuthScheme } from './gateway-client.js';
+import type { GatewayAuthScheme, GatewaySchema } from './gateway-client.js';
 import type { GatewayClient } from './types.js';
 
 const DEFAULT_MAX_ROUNDS = 4;
@@ -141,6 +147,7 @@ type GatewayMode =
       readonly kind: 'http';
       readonly baseUrl: string;
       readonly token: string;
+      readonly schema: GatewaySchema;
       readonly authScheme: GatewayAuthScheme;
     }
   | { readonly kind: 'mock' };
@@ -158,27 +165,33 @@ function resolveGatewayMode(): GatewayMode {
     return { kind: 'mock' };
   }
 
+  const schema = parseGatewaySchema(process.env['BRIDGE_GATEWAY_SCHEMA']);
+
   return {
     kind: 'http',
     baseUrl,
     token,
-    authScheme: parseAuthScheme(process.env['BRIDGE_GATEWAY_AUTH']),
+    schema,
+    authScheme: parseAuthScheme(process.env['BRIDGE_GATEWAY_AUTH'], schema),
   };
 }
 
-/** Shows the endpoint host and auth scheme without ever echoing the token. */
+/** Shows the endpoint, schema and auth scheme without ever echoing the token. */
 function describeGateway(mode: GatewayMode): string {
   if (mode.kind === 'mock') {
     return 'mock';
   }
 
-  return `http (${mode.baseUrl}, auth: ${mode.authScheme})`;
+  const endpoint = resolveEndpoint(mode.baseUrl, mode.schema);
+  return `http (${endpoint}, schema: ${mode.schema}, auth: ${mode.authScheme})`;
 }
 
-function createGateway(mode: GatewayMode): GatewayClient {  return mode.kind === 'http'
+function createGateway(mode: GatewayMode): GatewayClient {
+  return mode.kind === 'http'
     ? createHttpGateway({
         baseUrl: mode.baseUrl,
         token: mode.token,
+        schema: mode.schema,
         authScheme: mode.authScheme,
       })
     : createMockGateway();
@@ -188,6 +201,8 @@ main().catch((error: unknown) => {
   process.stderr.write(`model-bridge failed to start: ${String(error)}\n`);
   process.exit(1);
 });
+
+
 
 
 

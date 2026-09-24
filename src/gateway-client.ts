@@ -71,27 +71,62 @@ export function createMockGateway(): GatewayClient {
 export interface HttpGatewayOptions {
   readonly baseUrl: string;
   readonly token: string;
+  readonly schema?: GatewaySchema;
   readonly authScheme?: GatewayAuthScheme;
   readonly maxTokens?: number;
 }
 
+/** The request/response shape the upstream endpoint speaks. */
+export type GatewaySchema = 'anthropic-messages' | 'openai-chat';
+
 /** How the gateway expects the credential to be presented. */
 export type GatewayAuthScheme = 'x-api-key' | 'bearer';
 
+const GATEWAY_SCHEMAS: readonly GatewaySchema[] = ['anthropic-messages', 'openai-chat'];
+const DEFAULT_SCHEMA: GatewaySchema = 'anthropic-messages';
 const AUTH_SCHEMES: readonly GatewayAuthScheme[] = ['x-api-key', 'bearer'];
-const DEFAULT_AUTH_SCHEME: GatewayAuthScheme = 'x-api-key';
+
+const SCHEMA_PATHS: Record<GatewaySchema, string> = {
+  'anthropic-messages': '/v1/messages',
+  'openai-chat': '/v1/chat/completions',
+};
+
+const SCHEMA_DEFAULT_AUTH: Record<GatewaySchema, GatewayAuthScheme> = {
+  'anthropic-messages': 'x-api-key',
+  'openai-chat': 'bearer',
+};
+
+/** Reads the configured upstream schema, refusing anything unrecognised. */
+export function parseGatewaySchema(value: string | undefined): GatewaySchema {
+  const normalised = value?.trim().toLowerCase() ?? '';
+  if (normalised.length === 0) {
+    return DEFAULT_SCHEMA;
+  }
+
+  const match = GATEWAY_SCHEMAS.find((schema) => schema === normalised);
+  if (!match) {
+    throw new Error(
+      `Unknown gateway schema "${value}". Use one of: ${GATEWAY_SCHEMAS.join(', ')}.`,
+    );
+  }
+
+  return match;
+}
 
 /**
  * Reads the configured auth scheme, refusing anything unrecognised.
  *
- * Anthropic expects `x-api-key`; most corporate gateways sit behind an OAuth
- * proxy and expect `Authorization: Bearer`. Guessing wrong produces a 401 that
- * looks like a bad token, so the choice is explicit and a typo fails loudly.
+ * Anthropic expects `x-api-key`; OpenRouter and most corporate gateways expect
+ * `Authorization: Bearer`. Guessing wrong produces a 401 that looks like a bad
+ * token, so each schema carries the right default and a typo fails loudly.
  */
-export function parseAuthScheme(value: string | undefined): GatewayAuthScheme {
+export function parseAuthScheme(
+  value: string | undefined,
+  schema: GatewaySchema = DEFAULT_SCHEMA,
+): GatewayAuthScheme {
   const normalised = value?.trim().toLowerCase() ?? '';
   if (normalised.length === 0) {
-    return DEFAULT_AUTH_SCHEME;
+    return SCHEMA_DEFAULT_AUTH[schema];
   }
 
   const match = AUTH_SCHEMES.find((scheme) => scheme === normalised);
@@ -104,13 +139,28 @@ export function parseAuthScheme(value: string | undefined): GatewayAuthScheme {
   return match;
 }
 
-function buildHeaders(options: HttpGatewayOptions): Record<string, string> {
-  const headers: Record<string, string> = {
-    'content-type': 'application/json',
-    'anthropic-version': '2023-06-01',
-  };
+/**
+ * Builds the request URL from a base that may or may not already carry `/v1`.
+ *
+ * Providers document their base URL inconsistently — Anthropic without the
+ * version segment, OpenRouter with it. Normalising here means a pasted base URL
+ * works either way instead of producing a 404 that looks like a wrong host.
+ */
+export function resolveEndpoint(baseUrl: string, schema: GatewaySchema): string {
+  const root = baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
+  return `${root}${SCHEMA_PATHS[schema]}`;
+}
 
-  if ((options.authScheme ?? DEFAULT_AUTH_SCHEME) === 'bearer') {
+function buildHeaders(options: HttpGatewayOptions): Record<string, string> {
+  const schema = options.schema ?? DEFAULT_SCHEMA;
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+
+  if (schema === 'anthropic-messages') {
+    headers['anthropic-version'] = '2023-06-01';
+  }
+
+  const authScheme = options.authScheme ?? SCHEMA_DEFAULT_AUTH[schema];
+  if (authScheme === 'bearer') {
     headers['authorization'] = `Bearer ${options.token}`;
   } else {
     headers['x-api-key'] = options.token;
@@ -119,27 +169,47 @@ function buildHeaders(options: HttpGatewayOptions): Record<string, string> {
   return headers;
 }
 
+function buildBody(request: GatewayRequest, options: HttpGatewayOptions): string {
+  const schema = options.schema ?? DEFAULT_SCHEMA;
+  const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const systemPrompt = buildSystemPrompt(request);
+  const messages = request.messages.map((message) => ({
+    role: message.role,
+    content: message.content,
+  }));
+
+  if (schema === 'openai-chat') {
+    return JSON.stringify({
+      model: request.model,
+      max_tokens: maxTokens,
+      messages: [{ role: 'system', content: systemPrompt }, ...messages],
+    });
+  }
+
+  return JSON.stringify({
+    model: request.model,
+    max_tokens: maxTokens,
+    system: systemPrompt,
+    messages,
+  });
+}
+
 /**
- * Anthropic-style Messages client.
+ * Client for an upstream that speaks either the Anthropic Messages schema or
+ * the OpenAI Chat Completions schema.
  *
- * The gateway schema is isolated here so swapping providers is a one-file
- * change rather than a change across the loop.
+ * Both schemas are isolated here so swapping providers is a one-file change
+ * rather than a change across the loop.
  */
 export function createHttpGateway(options: HttpGatewayOptions): GatewayClient {
+  const schema = options.schema ?? DEFAULT_SCHEMA;
+
   return {
     complete: async (request: GatewayRequest): Promise<GatewayReply> => {
-      const response = await fetch(`${options.baseUrl.replace(/\/$/, '')}/v1/messages`, {
+      const response = await fetch(resolveEndpoint(options.baseUrl, schema), {
         method: 'POST',
         headers: buildHeaders(options),
-        body: JSON.stringify({
-          model: request.model,
-          max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
-          system: buildSystemPrompt(request),
-          messages: request.messages.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-        }),
+        body: buildBody(request, options),
       });
 
       if (!response.ok) {
@@ -147,7 +217,8 @@ export function createHttpGateway(options: HttpGatewayOptions): GatewayClient {
         throw new Error(`Gateway returned ${response.status}: ${detail.slice(0, 400)}`);
       }
 
-      const text = extractText(await response.json());
+      const payload: unknown = await response.json();
+      const text = schema === 'openai-chat' ? extractChoiceText(payload) : extractText(payload);
       return { text, toolCalls: parseToolCalls(text) };
     },
   };
@@ -191,6 +262,30 @@ function extractText(payload: unknown): string {
         : '',
     )
     .join('');
+}
+
+function extractChoiceText(payload: unknown): string {
+  if (typeof payload !== 'object' || payload === null || !('choices' in payload)) {
+    return '';
+  }
+
+  const choices = (payload as { choices?: unknown }).choices;
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return '';
+  }
+
+  const first = choices[0];
+  if (typeof first !== 'object' || first === null || !('message' in first)) {
+    return '';
+  }
+
+  const message = (first as { message?: unknown }).message;
+  if (typeof message !== 'object' || message === null || !('content' in message)) {
+    return '';
+  }
+
+  const content = (message as { content?: unknown }).content;
+  return typeof content === 'string' ? content : '';
 }
 
 function toToolCall(parsed: unknown): ToolCall | undefined {

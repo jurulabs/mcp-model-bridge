@@ -26,6 +26,7 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "smoke": "npm run build && node scripts/smoke-test.mjs",
+    "gateway:check": "npm run build && node scripts/gateway-check.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "vitest run",
     "test:unit": "vitest run",
@@ -45,3 +46,4 @@
     "node": ">=20.0.0"
   }
 }
+
